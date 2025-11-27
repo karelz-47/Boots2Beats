@@ -115,24 +115,24 @@ def call_boots_to_beats(
         model=MODEL_NAME,
         input=prompt,
         tools=[{"type": "web_search"}],
-        response_format={"type": "json_object"},  # ask the model for JSON
+        # ✅ Responses API JSON mode: use text.format, not response_format
+        text={"format": {"type": "json_object"}},
     )
 
-    # Extract the JSON text from the response.
-    # The Responses API returns a list in `output`.
-    # Each item has `content`; we expect one text output.
+    # ✅ Easiest way to get the text: use output_text helper
     try:
-        output_item = response.output[0]
-        text_parts = output_item.content
-        # text_parts is a list; we expect the first to be text
-        text = ""
-        if text_parts and hasattr(text_parts[0], "text"):
-            text = text_parts[0].text
-        else:
-            # fallback to string representation
-            text = str(response)
-    except Exception as e:
-        raise RuntimeError(f"Unexpected response structure from OpenAI: {e}")
+        text = response.output_text
+    except Exception:
+        # Fallback: try to reconstruct from output items if helper not present
+        try:
+            parts = []
+            for item in response.output:
+                for content in getattr(item, "content", []):
+                    if hasattr(content, "text") and content.text is not None:
+                        parts.append(content.text)
+            text = "\n".join(parts)
+        except Exception as e:
+            raise RuntimeError(f"Unexpected response structure from OpenAI: {e}")
 
     # Parse JSON
     try:
@@ -141,7 +141,6 @@ def call_boots_to_beats(
         raise ValueError(f"Model did not return valid JSON. Raw output:\n{text}") from e
 
     return data
-
 
 # === STREAMLIT UI ===
 
