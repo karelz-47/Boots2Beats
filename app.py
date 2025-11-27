@@ -23,7 +23,7 @@ if not OPENAI_API_KEY:
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Choose model (you can change later)
-MODEL_NAME = "gpt-4.1-mini"
+MODEL_NAME = "gpt-5.1"
 
 
 # ============= PROMPT BUILDER ============= #
