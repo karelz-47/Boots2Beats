@@ -106,39 +106,57 @@ def call_boots_to_beats(
 ) -> Dict[str, Any]:
     """
     Single call to OpenAI Responses API with web_search tool.
-    Asks for JSON and returns parsed dict.
+    We CANNOT use JSON mode with web_search, so we:
+    - ask for JSON in the prompt,
+    - let the model respond in normal text mode,
+    - extract the JSON substring manually and parse it.
     """
 
     prompt = build_prompt(song_title, artist, level, region, max_results)
 
+    # ❌ no response_format / text.format here
     response = client.responses.create(
         model=MODEL_NAME,
         input=prompt,
         tools=[{"type": "web_search"}],
-        # ✅ Responses API JSON mode: use text.format, not response_format
-        text={"format": {"type": "json_object"}},
     )
 
-    # ✅ Easiest way to get the text: use output_text helper
+    # --- Get the plain text output ---
+
+    # Newer SDKs: convenient helper
+    text = ""
     try:
         text = response.output_text
     except Exception:
-        # Fallback: try to reconstruct from output items if helper not present
+        # Fallback: manually concatenate all text parts
         try:
             parts = []
             for item in response.output:
                 for content in getattr(item, "content", []):
+                    # content may have attribute "text"
                     if hasattr(content, "text") and content.text is not None:
                         parts.append(content.text)
             text = "\n".join(parts)
         except Exception as e:
             raise RuntimeError(f"Unexpected response structure from OpenAI: {e}")
 
-    # Parse JSON
+    # --- Extract JSON substring from the text ---
+
+    def extract_json_block(s: str) -> str:
+        start = s.find("{")
+        end = s.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(f"No JSON object found in model output:\n{s}")
+        return s[start : end + 1]
+
+    json_str = extract_json_block(text)
+
     try:
-        data = json.loads(text)
+        data = json.loads(json_str)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Model did not return valid JSON. Raw output:\n{text}") from e
+        raise ValueError(
+            f"Model did not return valid JSON. Raw extracted block:\n{json_str}"
+        ) from e
 
     return data
 
