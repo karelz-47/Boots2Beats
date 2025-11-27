@@ -8,6 +8,13 @@ from openai import OpenAI
 
 # ============= CONFIG & CLIENT ============= #
 
+# Page config must come before any other Streamlit calls
+st.set_page_config(
+    page_title="Boots to Beats",
+    page_icon="logo.png",  # uses logo.png in the same folder as app.py
+    layout="centered",
+)
+
 # Read API key from env or Streamlit secrets
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or (
     st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else None
@@ -21,9 +28,7 @@ if not OPENAI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Choose model (you can change later)
-MODEL_NAME = "gpt-4.1-mini"
+MODEL_NAME = "gpt-5.1"  # you can change later
 
 
 # ============= PROMPT BUILDER ============= #
@@ -35,11 +40,7 @@ def build_prompt(
     region: Optional[str],
     max_results: int,
 ) -> str:
-    """
-    Build the instruction string for the model.
-    No literal JSON block here, only textual description,
-    so we avoid any f-string { } escaping problems.
-    """
+    """Build the instruction string for the model."""
 
     artist_part = f' by "{artist}"' if artist else ""
     region_part = region if region else "any"
@@ -112,8 +113,8 @@ def call_boots_to_beats(
 
     # --- Get model text output ---
 
-    # Newer SDKs may provide output_text helper
     try:
+        # Newer SDKs may provide this helper
         text = response.output_text
     except Exception:
         # Fallback: manually collect all text pieces
@@ -152,7 +153,9 @@ def call_boots_to_beats(
 
 # ============= STREAMLIT UI ============= #
 
-st.set_page_config(page_title="Boots to Beats", page_icon="💃", layout="centered")
+# Logo + title
+if os.path.exists("logo.png"):
+    st.image("logo.png", width=220)
 
 st.title("Boots to Beats")
 st.write(
@@ -161,40 +164,43 @@ st.write(
     "your level, and your dance floor."
 )
 
-with st.form("search_form"):
-    song_title = st.text_input("Song title", value="Texas Hold 'Em")
-    artist = st.text_input("Artist (optional)", value="Beyoncé")
+# --- Input widgets (no form, so you can search multiple times) ---
 
-    level = st.selectbox(
-        "Desired level",
-        ["Beginner", "High Beginner", "Improver", "Intermediate", "Advanced", "Any"],
-        index=0,
-    )
+song_title = st.text_input("Song title", value="Texas Hold 'Em")
+artist = st.text_input("Artist (optional)", value="Beyoncé")
 
-    region_choice = st.selectbox(
-        "Region (hint for the model)",
-        ["Global", "EU", "US", "UK", "Other"],
-        index=1,
-    )
-    region_other = st.text_input("If 'Other', specify region (optional)")
+level = st.selectbox(
+    "Desired level",
+    ["Beginner", "High Beginner", "Improver", "Intermediate", "Advanced", "Any"],
+    index=0,
+)
 
-    if region_choice == "Other" and region_other.strip():
-        region_value: Optional[str] = region_other.strip()
-    elif region_choice == "Global":
-        region_value = None
-    else:
-        region_value = region_choice
+region_choice = st.selectbox(
+    "Region (hint for the model)",
+    ["Global", "EU", "US", "UK", "Other"],
+    index=1,
+)
+region_other = st.text_input("If 'Other', specify region (optional)")
 
-    max_results = st.slider(
-        "Max choreographies to return",
-        min_value=1,
-        max_value=5,
-        value=3,
-    )
+if region_choice == "Other" and region_other.strip():
+    region_value: Optional[str] = region_other.strip()
+elif region_choice == "Global":
+    region_value = None
+else:
+    region_value = region_choice
 
-    submitted = st.form_submit_button("Find choreographies")
+max_results = st.slider(
+    "Max choreographies to return",
+    min_value=1,
+    max_value=5,
+    value=3,
+)
 
-if submitted:
+run_search = st.button("Find choreographies")
+
+# --- Run search when button clicked ---
+
+if run_search:
     if not song_title.strip():
         st.error("Please enter a song title.")
     else:
