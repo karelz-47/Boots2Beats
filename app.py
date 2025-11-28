@@ -40,7 +40,10 @@ def build_prompt(
     region: Optional[str],
     max_results: int,
 ) -> str:
-    """Build the instruction string for the model."""
+    """
+    Build the instruction string for the model.
+    We also ask explicitly for diverse choreographies and no duplicates.
+    """
 
     artist_part = f' by "{artist}"' if artist else ""
     region_part = region if region else "any"
@@ -61,7 +64,12 @@ def build_prompt(
         "   - Match the requested level as closely as possible:\n"
         "       Beginner, High Beginner, Improver, Intermediate, Advanced, or Any.\n"
         "   - Are suitable or commonly used in the requested region (if inferable).\n"
-        "3. Exclude:\n"
+        "3. Aim for DIVERSITY:\n"
+        "   - If there are multiple different choreographies for this song, prefer showing\n"
+        "     different dances (different choreographers / step patterns).\n"
+        "   - Do NOT return several entries for the same choreography just because it has\n"
+        "     multiple videos or step-sheet sites.\n"
+        "4. Exclude:\n"
         "   - General news articles about the song.\n"
         "   - Non-dance content.\n"
         "   - Choreographies for completely different songs.\n\n"
@@ -71,7 +79,7 @@ def build_prompt(
         '  - \"artist\" (string)\n'
         '  - \"requested_level\" (string)\n'
         '  - \"requested_region\" (string)\n'
-        '  - \"choreographies\" (array of objects)\n\n'
+        '  - \"choreographies\" (array of objects)\n\n"
         'Each item in \"choreographies\" must be an object with the keys:\n'
         '  - \"rank\" (integer, starting at 1 for best match)\n'
         '  - \"name\" (string, name of the choreography)\n'
@@ -82,6 +90,15 @@ def build_prompt(
         '  - \"extra_sources\" (array of strings, optional, other helpful links)\n'
         '  - \"reason\" (string, short explanation why this is a good match)\n\n'
         f'The array \"choreographies\" must contain at most {max_results} items, ordered from best to worst.\n'
+        "DIVERSITY & DEDUPLICATION RULES:\n"
+        "- Never include two items that are essentially the same choreography.\n"
+        "  Treat dances as the same if they have the same name and choreographer, or\n"
+        "  clearly describe the same steps, even if there are different videos/sites.\n"
+        "- If you find multiple URLs for the same choreography, create ONE item in\n"
+        "  \"choreographies\" for that dance. Put the best/most informative link in \"url\"\n"
+        "  and put all other useful links into \"extra_sources\".\n"
+        "- If you can only find fewer DISTINCT choreographies than the requested maximum,\n"
+        "  just return the smaller number (do NOT pad the list with duplicates).\n"
         "The JSON must be valid (no trailing commas, no comments).\n"
     )
 
