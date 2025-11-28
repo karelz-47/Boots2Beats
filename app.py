@@ -80,13 +80,19 @@ There are TWO types of suitable choreographies:
          are widely known "fits many songs" dances for similar songs in the same BPM range.
    - These must have fit_type = "compatible_generic".
 
+IMPORTANT: As long as it is musically reasonable, you SHOULD try to propose at least one
+compatible_generic dance, even if web search gives weaker direct evidence. In that case,
+clearly explain in "reason" that the dance is a generic fit based on tempo/rhythm and
+typical floor-filler usage, not a choreography written specifically for this song.
+
 TASK:
 1. Use web search to find BOTH:
    - Dedicated choreographies for this song.
    - Compatible general choreographies as described above.
 2. Prefer choreographies that:
    - Explicitly mention the song and/or artist in the title or description (for dedicated ones), OR
-   - Are clearly recommended or commonly used with this song or very similar songs (for compatible ones).
+   - Are clearly recommended or commonly used with this song or very similar songs (for compatible ones), OR
+   - Are widely known generic floor fillers that fit the likely tempo/rhythm/style of the song.
    - Match the requested level as closely as possible: Beginner, High Beginner, Improver,
      Intermediate, Advanced, or Any.
    - Are suitable or commonly used in the requested region (if inferable).
@@ -98,14 +104,15 @@ TASK:
    - General news articles about the song.
    - Non-dance content.
    - Choreographies for completely different songs.
-   - Pure speculation: do not claim a generic dance is used for this song unless there is
-     some support in web search (or it is clearly a widely used fits-many-songs floor filler).
 
 GROUPING & COUNTS:
 - Treat the maximum number of dedicated choreographies as {max_results}.
 - Treat the maximum number of compatible / generic choreographies as {max_results}.
 - Try to return up to {max_results} items with fit_type = "dedicated_for_song"
   AND up to {max_results} items with fit_type = "compatible_generic".
+- If you find at least one strong dedicated_for_song choreography, you should normally also
+  return at least one compatible_generic suggestion, unless you truly cannot identify any
+  musically compatible general dances.
 - The combined length of "choreographies" may be up to {total_max}, but never more.
 - If you cannot find enough DISTINCT choreographies in a group, just return fewer for that group.
   Do NOT pad with duplicates or invented dances.
@@ -141,8 +148,6 @@ DIVERSITY & DEDUPLICATION RULES FOR "choreographies":
   just return the smaller number and do NOT pad the list with duplicates.
 
 The JSON must be syntactically valid (no trailing commas, no comments)."""
-
-
 # ============= OPENAI CALL (WITH WEB SEARCH) ============= #
 
 def call_boots_to_beats(
