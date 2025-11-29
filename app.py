@@ -41,7 +41,7 @@ def extract_json_block(s: str) -> str:
     start = s.find("{")
     end = s.rfind("}")
     if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"No JSON object found in model output:\n{s}")
+        raise ValueError("No JSON object found in model output.")
     return s[start: end + 1]
 
 
@@ -233,7 +233,8 @@ The JSON must be syntactically valid (no trailing commas, no comments)."""
 
 def call_model_with_web_search(prompt: str) -> Dict[str, Any]:
     """
-    Call the OpenAI Responses API with web_search tool and parse JSON output.
+    Call the OpenAI Responses API with web_search tool and parse JSON output if possible.
+    If parsing fails (no JSON), return a dict with '_raw_text' containing the full text.
     """
     response = client.responses.create(
         model=MODEL_NAME,
@@ -252,20 +253,18 @@ def call_model_with_web_search(prompt: str) -> Dict[str, Any]:
                 for content in getattr(item, "content", []):
                     if hasattr(content, "text") and content.text is not None:
                         parts.append(content.text)
-        except Exception as e:
-            raise RuntimeError(f"Unexpected response structure from OpenAI: {e}")
+        except Exception:
+            # As a last resort, just dump the raw response
+            return {"_raw_text": str(response)}
         text = "\n".join(parts)
 
-    json_str = extract_json_block(text)
-
+    # Try to parse JSON; if it fails, return raw text instead of crashing
     try:
+        json_str = extract_json_block(text)
         data = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"Model did not return valid JSON. Extracted block:\n{json_str}"
-        ) from e
-
-    return data
+        return data
+    except Exception:
+        return {"_raw_text": text}
 
 
 # ============= RENDER HELPERS ============= #
@@ -432,8 +431,14 @@ if run_search:
                 )
             )
 
-        song_info = dedicated_data.get("song_info", {}) if isinstance(dedicated_data, dict) else {}
-        dedicated_choreos = dedicated_data.get("choreographies", []) if isinstance(dedicated_data, dict) else []
+        # Determine if we got structured JSON or just raw text
+        dedicated_raw_text = dedicated_data.get("_raw_text") if isinstance(dedicated_data, dict) else None
+        if dedicated_raw_text:
+            song_info = {}
+            dedicated_choreos: List[Dict[str, Any]] = []
+        else:
+            song_info = dedicated_data.get("song_info", {}) if isinstance(dedicated_data, dict) else {}
+            dedicated_choreos = dedicated_data.get("choreographies", []) if isinstance(dedicated_data, dict) else []
 
         # PART 2 – Musical matches from other songs
         with st.spinner("Finding musical matches from other songs..."):
@@ -448,29 +453,56 @@ if run_search:
                 )
             )
 
-        generic_choreos = generic_data.get("choreographies", []) if isinstance(generic_data, dict) else []
+        generic_raw_text = generic_data.get("_raw_text") if isinstance(generic_data, dict) else None
+        if generic_raw_text:
+            generic_choreos: List[Dict[str, Any]] = []
+        else:
+            generic_choreos = generic_data.get("choreographies", []) if isinstance(generic_data, dict) else []
 
-        # Render song info
+        # Render song info if we have structured data
         if song_info:
             render_song_info(song_info)
 
         st.subheader("Top matches")
 
-        # Enforce caps from slider (the prompts already try, this just protects UI)
+        # Enforce caps from slider for structured lists
         if dedicated_choreos:
             dedicated_choreos = dedicated_choreos[:max_results]
         if generic_choreos:
             generic_choreos = generic_choreos[:max_results]
 
-        if not dedicated_choreos and not generic_choreos:
-            st.info("No suitable choreographies found (or the model could not identify any).")
-        else:
+        # Render structured results as cards
+        if dedicated_choreos:
             render_choreo_group("Dances choreographed for this song", dedicated_choreos)
+        if generic_choreos:
             render_choreo_group("Musical matches from other songs", generic_choreos)
 
-        # Raw JSON for debugging
-        with st.expander("Raw JSON – dedicated group"):
-            st.json(dedicated_data)
+        # If a call returned only raw text, show it as-is
+        if dedicated_raw_text:
+            st.markdown("### Dances choreographed for this song (raw model answer)")
+            st.markdown(dedicated_raw_text)
 
-        with st.expander("Raw JSON – musical matches group"):
-            st.json(generic_data)
+        if generic_raw_text:
+            st.markdown("### Musical matches from other songs (raw model answer)")
+            st.markdown(generic_raw_text)
+
+        if (
+            not dedicated_choreos
+            and not generic_choreos
+            and not dedicated_raw_text
+            and not generic_raw_text
+        ):
+            st.info("No suitable choreographies found (or the model could not identify any).")
+
+        # Raw output for debugging in expanders
+        with st.expander("Model output – dedicated group (raw)"):
+            if dedicated_raw_text:
+                st.text(dedicated_raw_text)
+            else:
+                st.json(dedicated_data)
+
+        with st.expander("Model output – musical matches group (raw)"):
+            if generic_raw_text:
+                st.text(generic_raw_text)
+            else:
+                st.json(generic_data)
