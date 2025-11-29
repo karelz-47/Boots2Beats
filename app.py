@@ -42,9 +42,11 @@ def build_prompt(
 ) -> str:
     """
     Build the instruction string for the model,
-    with two groups of results:
-    - dedicated_for_song  -> choreos for THIS song
-    - compatible_generic  -> choreos for OTHER songs but musically compatible
+    with:
+    - song_info: short analysis of the song (tempo, style, feel, etc.)
+    - two choreography groups:
+        * dedicated_for_song  -> choreos for THIS song
+        * compatible_generic  -> choreos for OTHER songs but musically compatible
     """
 
     artist_part = f' by "{artist}"' if artist else ""
@@ -62,8 +64,10 @@ USER REQUEST:
 - Max choreographies per group: {max_results}
 
 MAIN GOAL:
-Suggest several different line dance choreographies that a DJ or instructor could reasonably
-use when this song is playing.
+1) Give a brief, factual description of the input song that is useful for line dancers
+   (tempo/BPM, rhythm, style, feel).
+2) Suggest several different line dance choreographies that a DJ or instructor could
+   reasonably use when this song is playing.
 
 There are TWO types of suitable choreographies:
 
@@ -87,11 +91,18 @@ There are TWO types of suitable choreographies:
         because it matches the tempo and feel of '{song_title}'."
    - These must have fit_type = "compatible_generic".
 
-TASK:
+TASK STEP 1 – SONG ANALYSIS:
+- Use web search to determine:
+  - The approximate tempo/BPM of the input song.
+  - The time signature (e.g. 4/4, 3/4).
+  - The main dance style / rhythm (e.g. cha-cha, waltz, nightclub, two-step, swing).
+  - A short description of the musical feel (e.g. "relaxed mid-tempo country ballad").
+  - Any commonly referenced social/partner/line-dance styles used with this song.
+- Summarise this in a compact, dancer-friendly description.
+
+TASK STEP 2 – CHOREOGRAPHY SEARCH:
 1. Use web search to:
    - Find dedicated_for_song choreographies for this exact song.
-   - Determine the approximate tempo/BPM, rhythm (cha-cha, waltz, nightclub, swing,
-     phrased, etc.), and overall style of the input song.
    - Find popular line dances for other songs with similar tempo/rhythm/style that
      would reasonably work as alternative dances for this song.
 2. Prefer choreographies that:
@@ -133,7 +144,20 @@ The top-level JSON object must have these keys:
 - "artist" (string)
 - "requested_level" (string)
 - "requested_region" (string)
+- "song_info" (object)
 - "choreographies" (array)
+
+The "song_info" object must have these keys:
+- "title" (string)
+- "artist" (string)
+- "bpm" (number or string, approximate tempo in BPM)
+- "tempo_label" (string, e.g. "slow", "mid-tempo", "up-tempo")
+- "style" (string, e.g. "country cha-cha", "nightclub two-step", "pop waltz")
+- "time_signature" (string, e.g. "4/4", "3/4")
+- "dance_feel" (string, short phrase describing feel for dancers)
+- "typical_dance_styles" (array of strings, e.g. ["line dance", "two-step"])
+- "summary" (string, 2–3 sentence summary oriented to dancers)
+- "sources" (array of strings, optional, URLs used to infer BPM/style)
 
 Each item in "choreographies" must be an object with these keys:
 - "rank" (integer, starting at 1 for best overall match)
@@ -263,6 +287,61 @@ def render_choreo_group(title: str, dances: List[Dict[str, Any]]) -> None:
                 st.markdown(f"> {reason}")
 
             st.markdown("---")
+
+
+def render_song_info(song_info: Dict[str, Any]) -> None:
+    """Render a short card about the input song: tempo, style, etc."""
+    if not song_info:
+        return
+
+    title = song_info.get("title") or "Song info"
+    artist = song_info.get("artist") or ""
+    bpm = song_info.get("bpm")
+    tempo_label = song_info.get("tempo_label")
+    style = song_info.get("style")
+    time_sig = song_info.get("time_signature")
+    dance_feel = song_info.get("dance_feel")
+    typical_styles = song_info.get("typical_dance_styles") or []
+    summary = song_info.get("summary")
+    sources = song_info.get("sources") or []
+
+    st.markdown("### About this song")
+
+    header_line = f"**{title}**"
+    if artist:
+        header_line += f" – {artist}"
+    st.markdown(header_line)
+
+    meta_parts: List[str] = []
+    if bpm:
+        meta_parts.append(f"≈ {bpm} BPM")
+    if tempo_label:
+        meta_parts.append(str(tempo_label))
+    if style:
+        meta_parts.append(str(style))
+    if time_sig:
+        meta_parts.append(str(time_sig))
+
+    if meta_parts:
+        st.markdown(" · ".join(meta_parts))
+
+    if dance_feel:
+        st.markdown(str(dance_feel))
+
+    if typical_styles:
+        st.markdown(
+            "Typical dance styles: " + ", ".join(str(x) for x in typical_styles)
+        )
+
+    if summary:
+        st.markdown(f"> {summary}")
+
+    if sources:
+        # Show just the first source as a link to keep it compact
+        first = sources[0]
+        st.markdown(f"[Source info ↗]({first})")
+
+    st.markdown("---")
 
 
 # ============= HELPER: SPLIT GROUPS WITH FALLBACK ============= #
@@ -400,9 +479,14 @@ if run_search:
                 st.error(f"Error while calling OpenAI / parsing response: {e}")
                 raise
 
+        # Song info section
+        song_info = data.get("song_info", {}) if isinstance(data, dict) else {}
+        if song_info:
+            render_song_info(song_info)
+
         st.subheader("Top matches")
 
-        choreos: List[Dict[str, Any]] = data.get("choreographies", [])
+        choreos: List[Dict[str, Any]] = data.get("choreographies", []) if isinstance(data, dict) else []
 
         if not choreos:
             st.info("No suitable choreographies found (or the model could not identify any).")
