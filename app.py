@@ -43,99 +43,6 @@ def build_prompt(
     """
     Build the instruction string for the model,
     with two groups of results:
-    - dedicated_for_song
-    - compatible_generic
-    and explicit diversity / no-duplicate rules.
-    """
-
-    artist_part = f' by "{artist}"' if artist else ""
-    region_part = region if region else "any"
-    total_max = max_results * 2
-
-    return f"""You are Boots to Beats, an expert line dance assistant.
-
-You help dancers figure out which line dance choreographies go with specific songs.
-
-USER REQUEST:
-- Song: "{song_title}"{artist_part}
-- Requested level: {level}
-- Requested region: {region_part}
-- Max choreographies per group: {max_results}
-
-MAIN GOAL:
-Suggest several different line dance choreographies that a DJ or instructor could reasonably
-use when this song is playing.
-
-There are TWO types of suitable choreographies:
-
-1) Dedicated choreographies:
-   - Dances that were clearly choreographed specifically for this song
-     (title or description strongly links them to this exact track).
-   - These must have fit_type = "dedicated_for_song".
-
-2) Compatible general choreographies:
-   - Well-known line dances that were NOT written only for this song but:
-       * match the tempo / rhythm / style of the song, and
-       * are actually used or suggested with this song in web sources, OR
-         are widely known "fits many songs" dances for similar songs in the same BPM range.
-   - These must have fit_type = "compatible_generic".
-
-IMPORTANT: As long as it is musically reasonable, you SHOULD try to propose at least one
-compatible_generic dance, even if web search gives weaker direct evidence. In that case,
-clearly explain in "reason" that the dance is a generic fit based on tempo/rhythm and
-typical floor-filler usage, not a choreography written specifically for this song.
-
-TASK:
-1. Use web search to find BOTH:
-   - Dedicated choreographies for this song.
-   - Compatible general choreographies as described above.
-2. Prefer choreographies that:
-   - Explicitly mention the song and/or artist in the title or description (for dedicated ones), OR
-   - Are clearly recommended or commonly used with this song or very similar songs (for compatible ones), OR
-   - Are widely known generic floor fillers that fit the likely tempo/rhythm/style of the song.
-   - Match the requested level as closely as possible: Beginner, High Beginner, Improver,
-     Intermediate, Advanced, or Any.
-   - Are suitable or commonly used in the requested region (if inferable).
-3. Aim for DIVERSITY:
-   - Show different dances (different choreographers or noticeably different step patterns).
-   - Do NOT return several entries for the same choreography just because it has multiple
-     videos or step-sheet sites.
-4. Exclude:
-   - General news articles about the song.
-   - Non-dance content.
-   - Choreographies for completely different songs.
-
-GROUPING & COUNTS:
-- Treat the maximum number of dedicated choreographies as {max_results}.
-- Treat the maximum number of compatible / generic choreographies as {max_results}.
-- Try to return up to {max_results} items with fit_type = "dedicated_for_song"
-  AND up to {max_results} items with fit_type = "compatible_generic".
-- If you find at least one strong dedicated_for_song choreography, you should normally also
-  return at least one compatible_generic suggestion, unless you truly cannot identify any
-  musically compatible general dances.
-- The combined length of "choreographies" may be up to {total_max}, but never more.
-- If you cannot find enough DISTINCT choreographies in a group, just return fewer for that group.
-  Do NOT pad with duplicates or invented dances.
-
-OUTPUT FORMAT (IMPORTANT):
-Return ONLY a single JSON object, no extra text.
-
-The top-level JSON object must have these keys:
-- "song" (string)
-- "artist" (string)
-- "requested_level" (string)
-- "requested_region" (string)
-- "choreographies" (array)
-def build_prompt(
-    song_title: str,
-    artist: Optional[str],
-    level: str,
-    region: Optional[str],
-    max_results: int,
-) -> str:
-    """
-    Build the instruction string for the model,
-    with two groups of results:
     - dedicated_for_song  -> choreos for THIS song
     - compatible_generic  -> choreos for OTHER songs but musically compatible
     """
@@ -249,6 +156,10 @@ DIVERSITY & DEDUPLICATION RULES FOR "choreographies":
   just return the smaller number and do NOT pad the list with duplicates.
 
 The JSON must be syntactically valid (no trailing commas, no comments)."""
+
+
+# ============= OPENAI CALL (WITH WEB SEARCH) ============= #
+
 def call_boots_to_beats(
     song_title: str,
     artist: Optional[str],
@@ -441,7 +352,7 @@ if run_search:
             ]
 
             render_choreo_group("Dances choreographed for this song", dedicated)
-            render_choreo_group("Generic / compatible dances", compatible)
+            render_choreo_group("Musical matches from other songs", compatible)
 
             if other:
                 render_choreo_group("Other suggestions", other)
