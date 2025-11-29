@@ -136,8 +136,8 @@ def build_prompt(
     """
     Build the instruction string for the model,
     with two groups of results:
-    - dedicated_for_song  → choreos for THIS song
-    - compatible_generic  → choreos for OTHER songs but musically compatible
+    - dedicated_for_song  -> choreos for THIS song
+    - compatible_generic  -> choreos for OTHER songs but musically compatible
     """
 
     artist_part = f' by "{artist}"' if artist else ""
