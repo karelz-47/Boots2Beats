@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import streamlit as st
 from openai import OpenAI
@@ -265,6 +265,75 @@ def render_choreo_group(title: str, dances: List[Dict[str, Any]]) -> None:
             st.markdown("---")
 
 
+# ============= HELPER: SPLIT GROUPS WITH FALLBACK ============= #
+
+def split_choreographies(
+    choreos: List[Dict[str, Any]],
+    song_title: str,
+    max_per_group: int,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Split choreographies into:
+    - dedicated_for_song
+    - compatible_generic
+    - other
+
+    If the model did not provide any compatible_generic items, use a heuristic:
+    reclassify some dances that do NOT clearly mention the input song in their
+    name/reason into the compatible_generic group, so the second block is useful.
+    """
+
+    dedicated: List[Dict[str, Any]] = []
+    compatible: List[Dict[str, Any]] = []
+    other: List[Dict[str, Any]] = []
+
+    song_lower = (song_title or "").lower()
+
+    # First pass: respect model's fit_type if present
+    for c in choreos:
+        fit_type = c.get("fit_type")
+        if fit_type == "dedicated_for_song":
+            dedicated.append(c)
+        elif fit_type == "compatible_generic":
+            compatible.append(c)
+        else:
+            other.append(c)
+
+    # Heuristic fallback: if no compatible_generic, try to create some
+    if not compatible and song_lower:
+        candidates: List[Dict[str, Any]] = []
+
+        # candidates: choreos that don't obviously reference the input song
+        for c in dedicated:
+            text = (
+                (c.get("name") or "") + " " + (c.get("reason") or "")
+            ).lower()
+            if song_lower not in text:
+                candidates.append(c)
+
+        for c in other:
+            candidates.append(c)
+
+        # move candidates into compatible until we reach max_per_group or run out
+        for c in candidates:
+            if len(compatible) >= max_per_group:
+                break
+            if c in dedicated:
+                dedicated.remove(c)
+            elif c in other:
+                other.remove(c)
+            c["fit_type"] = "compatible_generic"
+            compatible.append(c)
+
+    # Trim groups to max_per_group if needed
+    if len(dedicated) > max_per_group:
+        dedicated = dedicated[:max_per_group]
+    if len(compatible) > max_per_group:
+        compatible = compatible[:max_per_group]
+
+    return dedicated, compatible, other
+
+
 # ============= STREAMLIT UI ============= #
 
 # Logo + title
@@ -338,18 +407,11 @@ if run_search:
         if not choreos:
             st.info("No suitable choreographies found (or the model could not identify any).")
         else:
-            dedicated = [
-                c for c in choreos
-                if c.get("fit_type") == "dedicated_for_song"
-            ]
-            compatible = [
-                c for c in choreos
-                if c.get("fit_type") == "compatible_generic"
-            ]
-            other = [
-                c for c in choreos
-                if c.get("fit_type") not in ("dedicated_for_song", "compatible_generic")
-            ]
+            dedicated, compatible, other = split_choreographies(
+                choreos=choreos,
+                song_title=song_title.strip(),
+                max_per_group=max_results,
+            )
 
             render_choreo_group("Dances choreographed for this song", dedicated)
             render_choreo_group("Musical matches from other songs", compatible)
