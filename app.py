@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 
 import streamlit as st
 from openai import OpenAI
@@ -28,12 +28,26 @@ if not OPENAI_API_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-MODEL_NAME = "gpt-4.1-mini"  # you can change later
+MODEL_NAME = "gpt-4.1-mini"  # adjust if needed
 
 
-# ============= PROMPT BUILDER ============= #
+# ============= SHARED JSON HELPER ============= #
 
-def build_prompt(
+def extract_json_block(s: str) -> str:
+    """
+    Extract the first top-level JSON object from a text string.
+    We assume the model returns exactly one object.
+    """
+    start = s.find("{")
+    end = s.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"No JSON object found in model output:\n{s}")
+    return s[start: end + 1]
+
+
+# ============= PROMPTS ============= #
+
+def build_prompt_dedicated(
     song_title: str,
     artist: Optional[str],
     level: str,
@@ -41,17 +55,10 @@ def build_prompt(
     max_results: int,
 ) -> str:
     """
-    Build the instruction string for the model,
-    with:
-    - song_info: short analysis of the song (tempo, style, feel, etc.)
-    - two choreography groups:
-        * dedicated_for_song  -> choreos for THIS song
-        * compatible_generic  -> choreos for OTHER songs but musically compatible
+    Prompt for PART 1: dedicated choreographies + song_info.
     """
-
     artist_part = f' by "{artist}"' if artist else ""
     region_part = region if region else "any"
-    total_max = max_results * 2
 
     return f"""You are Boots to Beats, an expert line dance assistant.
 
@@ -61,159 +68,184 @@ USER REQUEST:
 - Song: "{song_title}"{artist_part}
 - Requested level: {level}
 - Requested region: {region_part}
-- Max choreographies per group: {max_results}
+- Requested number of choreographies in this group: {max_results}
 
-MAIN GOAL:
-1) Give a brief, factual description of the input song that is useful for line dancers
-   (tempo/BPM, rhythm, style, feel).
-2) Suggest several different line dance choreographies that a DJ or instructor could
-   reasonably use when this song is playing.
+THIS IS PART 1 OF 2. In this part, focus ONLY on line dance choreographies that are
+clearly linked to THIS input song, and provide a short dancer-oriented analysis of the song.
 
-There are TWO types of suitable choreographies:
+PART 1A – SONG ANALYSIS:
+1. Use web search to determine:
+   - The approximate tempo/BPM of the input song.
+   - The time signature (e.g. 4/4, 3/4).
+   - The main dance style / rhythm (e.g. country cha-cha, nightclub two-step, swing).
+   - A short description of the musical feel (e.g. "relaxed mid-tempo country waltz").
+   - Any commonly referenced social/partner/line-dance styles used with this song.
+2. Summarise this in a compact, dancer-friendly description.
 
-1) Song-specific choreographies ("dedicated_for_song"):
-   - Dances that were clearly choreographed specifically for this input song
-     (title or description strongly links them to this exact track), OR
-   - Dances that are widely recognised in line dance communities as THE standard
-     line dance for this song.
-   - These must have fit_type = "dedicated_for_song".
+PART 1B – DEDICATED CHOREOGRAPHIES:
+1. Use web search to identify line dances that:
+   - Were choreographed specifically for this song, OR
+   - Are widely recognised in the line dance community as THE standard line dance
+     for this song.
+2. For each suitable choreography, collect:
+   - Name
+   - Estimated level (Beginner, High Beginner, Improver, Intermediate, Advanced)
+   - Region of origin or primary use (if inferable)
+   - At least one reliable step-sheet or tutorial link
 
-2) Musically compatible choreographies from other songs ("compatible_generic"):
-   - Dances that were originally choreographed for OTHER songs, but whose music
-     (tempo/BPM, rhythm, style) is a good match for this input song.
-   - Typical examples in principle: a popular cha-cha line dance written for
-     "Señorita Margarita" used as a generic cha-cha for other 100–105 BPM
-     country/Latin tracks; or a slow country two-step dance written for one ballad
-     but usable on other songs with the same feel.
-   - These dances do NOT need to mention the input song at all.
-   - In the "reason" field you MUST say something like:
-       "Originally written for <other song> at <BPM> <style>; suggested here
-        because it matches the tempo and feel of '{song_title}'."
-   - These must have fit_type = "compatible_generic".
-
-TASK STEP 1 – SONG ANALYSIS:
-- Use web search to determine:
-  - The approximate tempo/BPM of the input song.
-  - The time signature (e.g. 4/4, 3/4).
-  - The main dance style / rhythm (e.g. cha-cha, waltz, nightclub, two-step, swing).
-  - A short description of the musical feel (e.g. "relaxed mid-tempo country ballad").
-  - Any commonly referenced social/partner/line-dance styles used with this song.
-- Summarise this in a compact, dancer-friendly description.
-
-TASK STEP 2 – CHOREOGRAPHY SEARCH:
-1. Use web search to:
-   - Find dedicated_for_song choreographies for this exact song.
-   - Find popular line dances for other songs with similar tempo/rhythm/style that
-     would reasonably work as alternative dances for this song.
-2. Prefer choreographies that:
-   - Explicitly mention the song and/or artist in the title or description
-     (for dedicated_for_song), OR
-   - Are well-known line dances whose original music is very similar in tempo/rhythm
-     to the input song (for compatible_generic).
-   - Match the requested level as closely as possible: Beginner, High Beginner,
-     Improver, Intermediate, Advanced, or Any.
-   - Are suitable or commonly used in the requested region (if inferable).
-3. Aim for DIVERSITY:
-   - Show different dances (different choreographers or noticeably different patterns).
-   - Do NOT return several entries for the same choreography just because it has multiple
-     videos or step-sheet sites.
-4. Exclude:
-   - General news articles about the song.
-   - Non-dance content.
-   - Choreographies for completely different styles (e.g. phrased advanced waltz for
-     a simple mid-tempo cha-cha) unless clearly justified.
-
-GROUPING & COUNTS:
-- Treat the maximum number of dedicated_for_song choreographies as {max_results}.
-- Treat the maximum number of compatible_generic choreographies as {max_results}.
-- Your ideal target is to return approximately:
-    * {max_results} items with fit_type = "dedicated_for_song", and
-    * {max_results} items with fit_type = "compatible_generic".
-- If both types exist in reality, you should NOT return 0 for one type.
-  It is better to return fewer than {max_results} dedicated_for_song items and include
-  some compatible_generic dances than to return only dedicated_for_song dances.
-- The combined length of "choreographies" may be up to {total_max}, but never more.
-- If you truly cannot identify ANY reasonable compatible_generic dances, you may return
-  only dedicated_for_song, but say this explicitly in the "reason" fields.
+QUANTITY RULE FOR THIS PART:
+- If web search indicates that there are at least {max_results} DISTINCT dedicated
+  line dances for this song, you MUST return exactly {max_results} choreographies
+  in this group.
+- Only return fewer than {max_results} when, after reasonable searching, you genuinely
+  cannot identify that many distinct dedicated choreographies for this song.
 
 OUTPUT FORMAT (IMPORTANT):
 Return ONLY a single JSON object, no extra text.
 
-The top-level JSON object must have these keys:
-- "song" (string)
-- "artist" (string)
-- "requested_level" (string)
-- "requested_region" (string)
-- "song_info" (object)
-- "choreographies" (array)
+The JSON object must have:
+- "song": string (song title)
+- "artist": string (artist name if known)
+- "requested_level": string
+- "requested_region": string
+- "song_info": object
+- "choreographies": array
 
-The "song_info" object must have these keys:
-- "title" (string)
-- "artist" (string)
-- "bpm" (number or string, approximate tempo in BPM)
-- "tempo_label" (string, e.g. "slow", "mid-tempo", "up-tempo")
-- "style" (string, e.g. "country cha-cha", "nightclub two-step", "pop waltz")
-- "time_signature" (string, e.g. "4/4", "3/4")
-- "dance_feel" (string, short phrase describing feel for dancers)
-- "typical_dance_styles" (array of strings, e.g. ["line dance", "two-step"])
-- "summary" (string, 2–3 sentence summary oriented to dancers)
-- "sources" (array of strings, optional, URLs used to infer BPM/style)
+The "song_info" object must contain:
+- "title": string
+- "artist": string
+- "bpm": number or string (approximate BPM)
+- "tempo_label": string (e.g. "slow", "mid-tempo", "up-tempo")
+- "style": string (e.g. "country cha-cha", "nightclub two-step")
+- "time_signature": string (e.g. "4/4", "3/4")
+- "dance_feel": string, short phrase for dancers
+- "typical_dance_styles": array of strings (e.g. ["line dance", "two-step"])
+- "summary": string (2–3 sentences oriented to dancers)
+- "sources": array of strings (optional, URLs you used)
 
-Each item in "choreographies" must be an object with these keys:
-- "rank" (integer, starting at 1 for best overall match)
-- "name" (string, name of the choreography)
-- "estimated_level" (string)
-- "estimated_region" (string)
-- "type" (string, exactly one of: "step_sheet", "tutorial_video", "article", "other")
-- "fit_type" (string, exactly one of: "dedicated_for_song", "compatible_generic")
-- "url" (string, main link for learning that choreography)
-- "extra_sources" (array of strings, optional, other helpful links)
-- "reason" (string, short explanation why this is a good match)
-
-DIVERSITY & DEDUPLICATION RULES FOR "choreographies":
-- Never include two items that are essentially the same choreography.
-  Treat dances as the same if they have the same name and choreographer, or clearly
-  describe the same steps, even if they are hosted on different sites/videos.
-- If you find multiple URLs for the same choreography, create ONE item in "choreographies":
-  put the best/most informative link in "url" and all other useful links into "extra_sources".
-- If you can only find fewer DISTINCT choreographies in a group than the requested maximum,
-  just return the smaller number and do NOT pad the list with duplicates.
+Each item in "choreographies" must be an object with:
+- "rank": integer (1 = strongest dedicated match)
+- "name": string
+- "estimated_level": string
+- "estimated_region": string
+- "type": string (one of "step_sheet", "tutorial_video", "article", "other")
+- "fit_type": string, MUST be "dedicated_for_song"
+- "url": string (main learning link)
+- "extra_sources": array of strings (optional)
+- "reason": string (why this is a good dedicated match for the song)
 
 The JSON must be syntactically valid (no trailing commas, no comments)."""
 
 
-# ============= OPENAI CALL (WITH WEB SEARCH) ============= #
-
-def call_boots_to_beats(
+def build_prompt_generic(
     song_title: str,
     artist: Optional[str],
     level: str,
     region: Optional[str],
     max_results: int,
-) -> Dict[str, Any]:
+    song_info: Optional[Dict[str, Any]],
+) -> str:
     """
-    Single call to OpenAI Responses API with web_search tool.
-    We CANNOT use JSON mode with web_search, so we:
-    - ask for JSON in the prompt,
-    - let the model respond in normal text mode,
-    - extract the JSON substring manually and parse it.
+    Prompt for PART 2: ONLY choreographies from OTHER songs,
+    but musically compatible with the input song.
     """
+    artist_part = f' by "{artist}"' if artist else ""
+    region_part = region if region else "any"
 
-    prompt = build_prompt(song_title, artist, level, region, max_results)
+    # Provide a short inline summary of song_info to guide the model
+    song_info_summary = ""
+    if song_info:
+        bpm = song_info.get("bpm")
+        style = song_info.get("style")
+        tempo_label = song_info.get("tempo_label")
+        summary_text = song_info.get("summary") or ""
+        meta_bits = []
+        if bpm:
+            meta_bits.append(f"≈{bpm} BPM")
+        if tempo_label:
+            meta_bits.append(str(tempo_label))
+        if style:
+            meta_bits.append(str(style))
+        meta_line = ", ".join(meta_bits)
+        song_info_summary = f"Approximate musical profile: {meta_line}. Summary: {summary_text}"
 
+    return f"""You are Boots to Beats, an expert line dance assistant.
+
+This is PART 2 OF 2 for the same user query.
+
+The user asked for line dance choreographies for:
+- Song: "{song_title}"{artist_part}
+- Requested level: {level}
+- Requested region: {region_part}
+- Requested number of choreographies in this group: {max_results}
+
+SONG PROFILE (approximate, from previous analysis):
+{song_info_summary}
+
+YOUR TASK IN THIS PART:
+Focus ONLY on line dance choreographies that were originally created for OTHER songs,
+but which are musically compatible with this input song.
+
+1. Use web search to identify popular line dances whose ORIGINAL music has:
+   - Tempo/BPM similar to the input song.
+   - Compatible rhythm and style (e.g. similar cha-cha / waltz / two-step / swing feel).
+2. These dances do NOT have to mention the input song at all.
+3. They should be realistic alternate choices for a DJ or instructor to use when
+   this input song is playing.
+4. For each choreography, clearly describe in "reason":
+   - The original song and approximate BPM/style.
+   - Why that makes it a good musical match for the input song.
+
+QUANTITY RULE FOR THIS PART:
+- If web search indicates that there are at least {max_results} DISTINCT suitable
+  alternate choreographies (for other songs), you MUST return exactly {max_results}
+  choreographies in this group.
+- Only return fewer than {max_results} when, after reasonable searching, you genuinely
+  cannot identify that many distinct suitable alternates.
+
+OUTPUT FORMAT (IMPORTANT):
+Return ONLY a single JSON object, no extra text.
+
+The JSON object must have:
+- "song": string (song title, same input song)
+- "artist": string (artist name if known)
+- "requested_level": string
+- "requested_region": string
+- "choreographies": array
+
+Each item in "choreographies" must be an object with:
+- "rank": integer (1 = best alternate match)
+- "name": string
+- "estimated_level": string
+- "estimated_region": string
+- "type": string (one of "step_sheet", "tutorial_video", "article", "other")
+- "fit_type": string, MUST be "compatible_generic"
+- "url": string (main learning link)
+- "extra_sources": array of strings (optional)
+- "reason": string, describing:
+    * the original song and style,
+    * why it is musically appropriate for the input song.
+
+The JSON must be syntactically valid (no trailing commas, no comments)."""
+
+
+# ============= OPENAI CALL WRAPPER ============= #
+
+def call_model_with_web_search(prompt: str) -> Dict[str, Any]:
+    """
+    Call the OpenAI Responses API with web_search tool and parse JSON output.
+    """
     response = client.responses.create(
         model=MODEL_NAME,
         input=prompt,
         tools=[{"type": "web_search"}],
     )
 
-    # --- Get model text output ---
-
+    # Try the helper if available
     try:
-        # Newer SDKs may provide this helper
         text = response.output_text
     except Exception:
-        # Fallback: manually collect all text pieces
+        # Fallback: manually collect text parts
         parts: List[str] = []
         try:
             for item in response.output:
@@ -224,30 +256,19 @@ def call_boots_to_beats(
             raise RuntimeError(f"Unexpected response structure from OpenAI: {e}")
         text = "\n".join(parts)
 
-    # --- Extract JSON substring ---
-
-    def extract_json_block(s: str) -> str:
-        start = s.find("{")
-        end = s.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(f"No JSON object found in model output:\n{s}")
-        return s[start: end + 1]
-
     json_str = extract_json_block(text)
-
-    # --- Parse JSON ---
 
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
         raise ValueError(
-            f"Model did not return valid JSON. Raw extracted block:\n{json_str}"
+            f"Model did not return valid JSON. Extracted block:\n{json_str}"
         ) from e
 
     return data
 
 
-# ============= HELPER: RENDER GROUPS AS CARDS ============= #
+# ============= RENDER HELPERS ============= #
 
 def render_choreo_group(title: str, dances: List[Dict[str, Any]]) -> None:
     """Render a group of choreographies as mobile-friendly cards."""
@@ -337,80 +358,10 @@ def render_song_info(song_info: Dict[str, Any]) -> None:
         st.markdown(f"> {summary}")
 
     if sources:
-        # Show just the first source as a link to keep it compact
         first = sources[0]
         st.markdown(f"[Source info ↗]({first})")
 
     st.markdown("---")
-
-
-# ============= HELPER: SPLIT GROUPS WITH FALLBACK ============= #
-
-def split_choreographies(
-    choreos: List[Dict[str, Any]],
-    song_title: str,
-    max_per_group: int,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Split choreographies into:
-    - dedicated_for_song
-    - compatible_generic
-    - other
-
-    If the model did not provide any compatible_generic items, use a heuristic:
-    reclassify some dances that do NOT clearly mention the input song in their
-    name/reason into the compatible_generic group, so the second block is useful.
-    """
-
-    dedicated: List[Dict[str, Any]] = []
-    compatible: List[Dict[str, Any]] = []
-    other: List[Dict[str, Any]] = []
-
-    song_lower = (song_title or "").lower()
-
-    # First pass: respect model's fit_type if present
-    for c in choreos:
-        fit_type = c.get("fit_type")
-        if fit_type == "dedicated_for_song":
-            dedicated.append(c)
-        elif fit_type == "compatible_generic":
-            compatible.append(c)
-        else:
-            other.append(c)
-
-    # Heuristic fallback: if no compatible_generic, try to create some
-    if not compatible and song_lower:
-        candidates: List[Dict[str, Any]] = []
-
-        # candidates: choreos that don't obviously reference the input song
-        for c in dedicated:
-            text = (
-                (c.get("name") or "") + " " + (c.get("reason") or "")
-            ).lower()
-            if song_lower not in text:
-                candidates.append(c)
-
-        for c in other:
-            candidates.append(c)
-
-        # move candidates into compatible until we reach max_per_group or run out
-        for c in candidates:
-            if len(compatible) >= max_per_group:
-                break
-            if c in dedicated:
-                dedicated.remove(c)
-            elif c in other:
-                other.remove(c)
-            c["fit_type"] = "compatible_generic"
-            compatible.append(c)
-
-    # Trim groups to max_per_group if needed
-    if len(dedicated) > max_per_group:
-        dedicated = dedicated[:max_per_group]
-    if len(compatible) > max_per_group:
-        compatible = compatible[:max_per_group]
-
-    return dedicated, compatible, other
 
 
 # ============= STREAMLIT UI ============= #
@@ -452,7 +403,7 @@ else:
     region_value = region_choice
 
 max_results = st.slider(
-    "Max choreographies per group",
+    "Choreographies per group",
     min_value=1,
     max_value=5,
     value=3,
@@ -466,43 +417,60 @@ if run_search:
     if not song_title.strip():
         st.error("Please enter a song title.")
     else:
-        with st.spinner("Boots to Beats is searching the web and ranking choreographies..."):
-            try:
-                data = call_boots_to_beats(
-                    song_title=song_title.strip(),
-                    artist=artist.strip() or None,
+        song_clean = song_title.strip()
+        artist_clean = artist.strip() or None
+
+        # PART 1 – Dedicated choreographies + song_info
+        with st.spinner("Finding choreographies dedicated to this song..."):
+            dedicated_data = call_model_with_web_search(
+                build_prompt_dedicated(
+                    song_title=song_clean,
+                    artist=artist_clean,
                     level=level,
                     region=region_value,
                     max_results=max_results,
                 )
-            except Exception as e:
-                st.error(f"Error while calling OpenAI / parsing response: {e}")
-                raise
+            )
 
-        # Song info section
-        song_info = data.get("song_info", {}) if isinstance(data, dict) else {}
+        song_info = dedicated_data.get("song_info", {}) if isinstance(dedicated_data, dict) else {}
+        dedicated_choreos = dedicated_data.get("choreographies", []) if isinstance(dedicated_data, dict) else []
+
+        # PART 2 – Musical matches from other songs
+        with st.spinner("Finding musical matches from other songs..."):
+            generic_data = call_model_with_web_search(
+                build_prompt_generic(
+                    song_title=song_clean,
+                    artist=artist_clean,
+                    level=level,
+                    region=region_value,
+                    max_results=max_results,
+                    song_info=song_info,
+                )
+            )
+
+        generic_choreos = generic_data.get("choreographies", []) if isinstance(generic_data, dict) else []
+
+        # Render song info
         if song_info:
             render_song_info(song_info)
 
         st.subheader("Top matches")
 
-        choreos: List[Dict[str, Any]] = data.get("choreographies", []) if isinstance(data, dict) else []
+        # Enforce caps from slider (the prompts already try, this just protects UI)
+        if dedicated_choreos:
+            dedicated_choreos = dedicated_choreos[:max_results]
+        if generic_choreos:
+            generic_choreos = generic_choreos[:max_results]
 
-        if not choreos:
+        if not dedicated_choreos and not generic_choreos:
             st.info("No suitable choreographies found (or the model could not identify any).")
         else:
-            dedicated, compatible, other = split_choreographies(
-                choreos=choreos,
-                song_title=song_title.strip(),
-                max_per_group=max_results,
-            )
-
-            render_choreo_group("Dances choreographed for this song", dedicated)
-            render_choreo_group("Musical matches from other songs", compatible)
-
-            if other:
-                render_choreo_group("Other suggestions", other)
+            render_choreo_group("Dances choreographed for this song", dedicated_choreos)
+            render_choreo_group("Musical matches from other songs", generic_choreos)
 
         # Raw JSON for debugging
-        with st.expander("Raw JSON response"):
-            st.json(data)
+        with st.expander("Raw JSON – dedicated group"):
+            st.json(dedicated_data)
+
+        with st.expander("Raw JSON – musical matches group"):
+            st.json(generic_data)
